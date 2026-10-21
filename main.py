@@ -177,6 +177,43 @@ def process_job(job_id: str, job: Job) -> None:
                 flush(i)
         flush(total)
 
+        # Ambientes (IfcSpace)
+        space_storey: dict[str, str] = {}
+        for rel in model.by_type("IfcRelAggregates"):
+            obj = rel.RelatingObject
+            if obj and obj.is_a("IfcBuildingStorey"):
+                for sp in rel.RelatedObjects or []:
+                    space_storey[sp.GlobalId] = storeys.get(obj.GlobalId)
+        spaces_batch: list[dict] = []
+        for sp in model.by_type("IfcSpace"):
+            try:
+                q: dict[str, float] = {}
+                for qset in (get_psets(sp, qtos_only=True) or {}).values():
+                    for k, v in (qset or {}).items():
+                        if isinstance(v, (int, float)):
+                            q[k] = float(v)
+                spaces_batch.append({
+                    "global_id": sp.GlobalId,
+                    "name": sp.Name,
+                    "long_name": getattr(sp, "LongName", None),
+                    "storey": space_storey.get(sp.GlobalId) or element_storey.get(sp.GlobalId),
+                    "floor_area_m2": q.get("NetFloorArea") or q.get("GrossFloorArea"),
+                    "wall_area_m2": q.get("NetWallArea") or q.get("GrossWallArea"),
+                    "ceiling_area_m2": q.get("NetCeilingArea") or q.get("GrossCeilingArea") or q.get("NetFloorArea") or q.get("GrossFloorArea"),
+                    "perimeter_m": q.get("GrossPerimeter") or q.get("NetPerimeter"),
+                    "height_m": q.get("Height") or q.get("FinishCeilingHeight"),
+                })
+            except Exception:
+                log.warning("Ambiente ignorado: %s", sp.GlobalId)
+        for s in range(0, len(spaces_batch), 1000):
+            notify(job, {
+                "model_id": job.model_id,
+                "status": "processing",
+                "progress": 97,
+                "message": "Lendo ambientes…",
+                "spaces": spaces_batch[s:s + 1000],
+            })
+
         notify(job, {
             "model_id": job.model_id,
             "status": "completed",
